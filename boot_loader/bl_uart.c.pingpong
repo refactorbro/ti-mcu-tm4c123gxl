@@ -1,0 +1,435 @@
+//*****************************************************************************
+//
+// bl_uart.c - Functions to transfer data via the UART port.
+//
+// Copyright (c) 2006-2015 Texas Instruments Incorporated.  All rights reserved.
+// Software License Agreement
+// 
+// Texas Instruments (TI) is supplying this software for use solely and
+// exclusively on TI's microcontroller products. The software is owned by
+// TI and/or its suppliers, and is protected under applicable copyright
+// laws. You may not combine this software with "viral" open-source
+// software in order to form a larger program.
+// 
+// THIS SOFTWARE IS PROVIDED "AS IS" AND WITH ALL FAULTS.
+// NO WARRANTIES, WHETHER EXPRESS, IMPLIED OR STATUTORY, INCLUDING, BUT
+// NOT LIMITED TO, IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE APPLY TO THIS SOFTWARE. TI SHALL NOT, UNDER ANY
+// CIRCUMSTANCES, BE LIABLE FOR SPECIAL, INCIDENTAL, OR CONSEQUENTIAL
+// DAMAGES, FOR ANY REASON WHATSOEVER.
+// 
+// This is part of revision 2.1.1.71 of the Tiva Firmware Development Package.
+//
+//*****************************************************************************
+
+#include <stdint.h>
+#include <stdbool.h> //Hsiang add
+#include "inc/hw_gpio.h"
+#include "inc/hw_memmap.h"
+#include "inc/hw_sysctl.h"
+#include "inc/hw_types.h"
+#include "inc/hw_uart.h"
+#include "bl_config.h"
+#include "boot_loader/bl_uart.h"
+#include "driverlib/rom.h" //Hsiang add
+#include "driverlib/pin_map.h" //Hsiang add
+#include "driverlib/gpio.h" //Hsiang add
+#include "driverlib/sysctl.h" //Hsiang add
+#include "driverlib/uart.h" //Hsiang add
+#include "utils/uartstdio.h" //Hsiang add
+#include "utils/cmdline.h" //Hsiang add
+#include "inc/hw_nvic.h" //Hsiang add
+
+#define APP_INPUT_BUF_SIZE               128 //Hsiang add
+
+//*****************************************************************************
+//
+// Hsiang add: Input buffer for the command line interpreter.
+//
+//*****************************************************************************
+static char g_cInput[APP_INPUT_BUF_SIZE];
+
+//*****************************************************************************
+//
+// This function is used to call the user application.  It will set the NVIC
+// to point at the user app's vector table, load up the user app's stack
+// pointer, and then jump to the application.
+//
+// This function must be programmed in assembly since it needs to directly
+// manipulate the value in the stack pointer, and because it needs to perform
+// a direct branch to the user app and not a function call (bl).
+//
+//*****************************************************************************
+#if defined(codered) || defined(gcc) || defined(sourcerygxx)
+void __attribute__((naked))
+CallApplication(uint_fast32_t ui32StartAddr)
+{
+    //
+    // Set the vector table to the beginning of the app in flash.
+    //
+    HWREG(NVIC_VTABLE) = ui32StartAddr;
+
+    //
+    // Load the stack pointer from the application's vector table.
+    //
+    __asm("    ldr     r1, [r0]\n"
+          "    mov     sp, r1");
+
+    //
+    // Load the initial PC from the application's vector table and branch to
+    // the application's entry point.
+    //
+    __asm("    ldr     r0, [r0, #4]\n"
+          "    bx      r0\n");
+}
+#elif defined(ewarm)
+void
+CallApplication(uint_fast32_t ui32StartAddr)
+{
+    //
+    // Set the vector table to the beginning of the app in flash.
+    //
+    HWREG(NVIC_VTABLE) = ui32StartAddr;
+
+    //
+    // Load the stack pointer from the application's vector table.
+    //
+    __asm("    ldr     r1, [r0]\n"
+          "    mov     sp, r1");
+
+    //
+    // Load the initial PC from the application's vector table and branch to
+    // the application's entry point.
+    //
+    __asm("    ldr     r0, [r0, #4]\n"
+          "    bx      r0\n");
+}
+#elif defined(rvmdk) || defined(__ARMCC_VERSION)
+__asm void
+CallApplication(uint_fast32_t ui32StartAddr)
+{
+    //
+    // Set the vector table address to the beginning of the application.
+    //
+    ldr     r1, =0xe000ed08
+    str     r0, [r1]
+
+    //
+    // Load the stack pointer from the application's vector table.
+    //
+    ldr     r1, [r0]
+    mov     sp, r1
+
+    //
+    // Load the initial PC from the application's vector table and branch to
+    // the application's entry point.
+    //
+    ldr     r0, [r0, #4]
+    bx      r0
+}
+#elif defined(ccs)
+void
+CallApplication(uint_fast32_t ui32StartAddr)
+{
+    //
+    // Set the vector table to the beginning of the app in flash.
+    //
+    HWREG(NVIC_VTABLE) = ui32StartAddr;
+
+    //
+    // Load the stack pointer from the application's vector table.
+    //
+    __asm("    ldr     r1, [r0]\n"
+          "    mov     sp, r1\n");
+
+    //
+    // Load the initial PC from the application's vector table and branch to
+    // the application's entry point.
+    //
+    __asm("    ldr     r0, [r0, #4]\n"
+          "    bx      r0\n");
+}
+#else
+#error Undefined compiler!
+#endif
+
+//*****************************************************************************
+// Hsiang add:
+// Command: runfw1
+//
+// Run FW1 @ flash loc. 0x2800.
+//
+//*****************************************************************************
+int
+CMD_runfw1(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    uint_fast32_t ui32ProgAddr;
+
+    UARTprintf("\nRun FW1\n------------------\n\n");
+
+    ui32ProgAddr = 0x2800;
+
+    CallApplication(ui32ProgAddr);
+
+    return (0);
+}
+
+//*****************************************************************************
+// Hsiang add:
+// Command: upfw1
+//
+// Run FW2 @ flash loc. 0x5000.
+//
+//*****************************************************************************
+int
+CMD_runfw2(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    uint_fast32_t ui32ProgAddr;
+
+    UARTprintf("\nRun FW2\n------------------\n\n");
+
+    ui32ProgAddr = 0x5000;
+
+    CallApplication(ui32ProgAddr);
+
+    return (0);
+}
+
+//*****************************************************************************
+//
+// Hsiang add: Table of valid command strings, callback functions and help messages.  This
+// is used by the cmdline module.
+//
+//*****************************************************************************
+tCmdLineEntry g_psCmdTable[] =
+{
+	{"runfw1",    CMD_runfw1,     " : Run FW1 (@0x2800)"},
+	{"runfw2",    CMD_runfw2,     " : Run FW2 (@0x5000)"},
+    { 0, 0, 0 }
+};
+
+//*****************************************************************************
+//
+//! \addtogroup bl_uart_api
+//! @{
+//
+//*****************************************************************************
+#if defined(UART_ENABLE_UPDATE) || defined(DOXYGEN)
+
+//*****************************************************************************
+//
+//! Sends data over the UART port.
+//!
+//! \param pui8Data is the buffer containing the data to write out to the UART
+//! port.
+//! \param ui32Size is the number of bytes provided in \e pui8Data buffer that
+//! will be written out to the UART port.
+//!
+//! This function sends \e ui32Size bytes of data from the buffer pointed to by
+//! \e pui8Data via the UART port.
+//!
+//! \return None.
+//
+//*****************************************************************************
+void
+UARTSend(const uint8_t *pui8Data, uint32_t ui32Size)
+{
+    //
+    // Transmit the number of bytes requested on the UART port.
+    //
+    while(ui32Size--)
+    {
+        //
+        // Make sure that the transmit FIFO is not full.
+        //
+        while((HWREG(UART0_BASE + UART_O_FR) & UART_FR_TXFF))
+        {
+        }
+
+        //
+        // Send out the next byte.
+        //
+        HWREG(UART0_BASE + UART_O_DR) = *pui8Data++;
+    }
+
+    //
+    // Wait until the UART is done transmitting.
+    //
+    UARTFlush();
+}
+
+//*****************************************************************************
+//
+//! Waits until all data has been transmitted by the UART port.
+//!
+//! This function waits until all data written to the UART port has been
+//! transmitted.
+//!
+//! \return None.
+//
+//*****************************************************************************
+void
+UARTFlush(void)
+{
+    //
+    // Wait for the UART FIFO to empty and then wait for the shifter to get the
+    // bytes out the port.
+    //
+    while(!(HWREG(UART0_BASE + UART_O_FR) & UART_FR_TXFE))
+    {
+    }
+
+    //
+    // Wait for the FIFO to not be busy so that the shifter completes.
+    //
+    while((HWREG(UART0_BASE + UART_O_FR) & UART_FR_BUSY))
+    {
+    }
+}
+
+//*****************************************************************************
+//
+//! Receives data over the UART port.
+//!
+//! \param pui8Data is the buffer to read data into from the UART port.
+//! \param ui32Size is the number of bytes provided in the \e pui8Data buffer
+//! that should be written with data from the UART port.
+//!
+//! This function reads back \e ui32Size bytes of data from the UART port, into
+//! the buffer that is pointed to by \e pui8Data.  This function will not
+//! return until \e ui32Size number of bytes have been received.
+//!
+//! \return None.
+//
+//*****************************************************************************
+void
+UARTReceive(uint8_t *pui8Data, uint32_t ui32Size)
+{
+    //
+    // Send out the number of bytes requested.
+    //
+    while(ui32Size--)
+    {
+        //
+        // Wait for the FIFO to not be empty.
+        //
+        while((HWREG(UART0_BASE + UART_O_FR) & UART_FR_RXFE))
+        {
+        }
+
+        //
+        // Receive a byte from the UART.
+        //
+        *pui8Data++ = HWREG(UART0_BASE + UART_O_DR);
+    }
+}
+
+//*****************************************************************************
+//
+// Configure the UART and its pins.  This must be called before UARTprintf().
+//
+//*****************************************************************************
+void
+ConfigureUART(void)
+{
+    int32_t i32CommandStatus;
+
+    //
+    // Enable the GPIO Peripheral used by the UART.
+    //
+    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+
+    //
+    // Enable UART0
+    //
+    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+
+    //
+    // Configure GPIO Pins for UART mode.
+    //
+    ROM_GPIOPinConfigure(GPIO_PA0_U0RX);
+    ROM_GPIOPinConfigure(GPIO_PA1_U0TX);
+    ROM_GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+
+    //
+    // Use the internal 16MHz oscillator as the UART clock source.
+    //
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
+
+    //
+    // Initialize the UART for console I/O.
+    //
+    UARTStdioConfig(0, 115200, 16000000);
+
+    //
+    // spin forever and wait for carriage returns or state changes.
+    //
+    while(1)
+    {
+
+        UARTprintf("\n>");
+
+
+//        //
+//        // Peek to see if a full command is ready for processing
+//        //
+//        while(UARTPeek('\r') == -1)
+//        {
+//            //
+//            // millisecond delay.  A SysCtlSleep() here would also be OK.
+//            //
+//            SysCtlDelay(SysCtlClockGet() / (1000 / 3));
+//
+//            //
+//            // Check for change of mode and enter hibernate if requested.
+//            // all other mode changes handled in interrupt context.
+//            //
+//            if(g_sAppState.ui32Mode == APP_MODE_HIB)
+//            {
+//                AppHibernateEnter();
+//            }
+//        }
+
+        //
+        // a '\r' was detected get the line of text from the user.
+        //
+        UARTgets(g_cInput,sizeof(g_cInput));
+
+        //
+        // Pass the line from the user to the command processor.
+        // It will be parsed and valid commands executed.
+        //
+        i32CommandStatus = CmdLineProcess(g_cInput);
+
+//        //
+//        // Handle the case of bad command.
+//        //
+//        if(i32CommandStatus == CMDLINE_BAD_CMD)
+//        {
+//            UARTprintf("Bad command!\n");
+//        }
+
+//        //
+//        // Handle the case of too many arguments.
+//        //
+//        else if(i32CommandStatus == CMDLINE_TOO_MANY_ARGS)
+//        {
+//            UARTprintf("Too many arguments for command processor!\n");
+//        }
+    }
+
+}
+
+//*****************************************************************************
+//
+// Close the Doxygen group.
+//! @}
+//
+//*****************************************************************************
+#endif
